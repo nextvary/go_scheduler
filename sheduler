@@ -1,0 +1,77 @@
+
+package scheduler
+
+import (
+	"strconv"
+	"sync"
+	"time"
+)
+
+type Scheduler struct {
+	WorkerName    string
+	YieldChan     chan interface{}
+	StartTime     time.Time
+	EndTime       time.Time
+	Process       int
+	Any           interface{}
+}
+type worker struct {
+	Id            int
+	SchedulerInfo *Scheduler
+	Done          func()
+	WorkFunc      func(scheduler *Scheduler)
+}
+
+type yieldWorker struct {
+	SchedulerInfo *Scheduler
+	YieldFunc     func(scheduler *Scheduler)
+}
+
+func (w worker) run() {
+	defer func() {
+		dlog.Info("Worker Name", w.SchedulerInfo.WorkerName, "Worker Id："+strconv.Itoa(w.Id), "over")
+		w.Done()
+	}()
+	w.WorkFunc(w.SchedulerInfo)
+}
+
+func (y yieldWorker) run() {
+	defer close(y.SchedulerInfo.YieldChan)
+	y.YieldFunc(y.SchedulerInfo)
+}
+
+func (s *Scheduler) Start(yieldFunc func(scheduler *Scheduler), workFunc func(scheduler *Scheduler)) {
+	var wg sync.WaitGroup
+	for i := 0; i < s.Process; i++ {
+		wg.Add(1)
+		go worker{
+			SchedulerInfo: s,
+			Done: func() {
+				wg.Done()
+			},
+			Id:       i,
+			WorkFunc: workFunc,
+		}.run()
+	}
+
+	go yieldWorker{
+		SchedulerInfo: s,
+		YieldFunc:     yieldFunc,
+	}.run()
+
+	wg.Wait()
+	s.EndTime = time.Now()
+	dlog.Info("Scheduler Over, Name:", s.WorkerName)
+}
+
+// process:worker数量，yieldDealLen:生成器每次查询的条数，yieldChanNum:生成器最大缓存数（最大可同时处理数量）,利用yieldChan 发送数据
+func NewScheduler(process int,  yieldChanNum int, workName string, any interface{}) (scheduler *Scheduler) {
+	return &Scheduler{
+		YieldChan:    make(chan interface{}, yieldChanNum),
+		StartTime:    time.Now(),
+		EndTime:      time.Time{},
+		Process:      process,
+		WorkerName:   workName,
+		Any:          any,
+	}
+}
